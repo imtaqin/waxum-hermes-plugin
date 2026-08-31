@@ -78,3 +78,30 @@ def send_cta_url(args: dict, **kwargs) -> str:
         return json.dumps({"success": True, "message_id": result.get("message_id")})
     except (KeyError, WaxumError) as e:
         return _error(e)
+
+
+_HANDLERS = {
+    "waxum_send_buttons": send_buttons,
+    "waxum_send_list": send_list,
+    "waxum_send_cta_url": send_cta_url,
+}
+
+
+def register_tools(ctx) -> None:
+    """Register the outbound client tools on a PluginContext.
+
+    Called two ways:
+    - eagerly by Hermes's deferred-platform discovery when ``provides_tools``
+      is declared in plugin.yaml (so the tools exist in CLI/TUI sessions too),
+    - from ``register()`` in __init__.py when the platform adapter materializes.
+    """
+    from . import schemas
+
+    for schema in schemas.ALL:
+        ctx.register_tool(
+            name=schema["name"],
+            toolset="waxum",
+            schema=schema,
+            handler=_HANDLERS[schema["name"]],
+            check_fn=lambda: True,
+        )

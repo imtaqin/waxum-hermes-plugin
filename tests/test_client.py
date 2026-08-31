@@ -88,7 +88,9 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(result["message_id"], "m1")
         self.assertTrue(captured["url"].endswith("/sessions/s1/messages/buttons"))
         self.assertEqual(captured["body"]["to"], "123@s.whatsapp.net")
-        self.assertEqual(captured["body"]["buttons"], [{"id": "a", "text": "A"}])
+        # waxum contract: content_text + buttons[{button_id, display_text}]
+        self.assertEqual(captured["body"]["content_text"], "pick one")
+        self.assertEqual(captured["body"]["buttons"], [{"button_id": "a", "display_text": "A"}])
 
 
 if __name__ == "__main__":

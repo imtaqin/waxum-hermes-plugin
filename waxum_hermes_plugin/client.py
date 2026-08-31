@@ -111,7 +111,18 @@ class WaxumClient:
         return self.post(f"/sessions/{self.cfg.session_id}/messages/text", body)
 
     def send_buttons(self, to: str, body: str, buttons: list[dict], footer: Optional[str] = None) -> dict:
-        payload: dict[str, Any] = {"to": to, "body": body, "buttons": buttons}
+        # waxum contract: content_text + buttons[{button_id, display_text}]
+        payload: dict[str, Any] = {
+            "to": to,
+            "content_text": body,
+            "buttons": [
+                {
+                    "button_id": b.get("button_id") or b.get("id", ""),
+                    "display_text": b.get("display_text") or b.get("text", ""),
+                }
+                for b in buttons
+            ],
+        }
         if footer:
             payload["footer"] = footer
         return self.post(f"/sessions/{self.cfg.session_id}/messages/buttons", payload)
@@ -119,20 +130,55 @@ class WaxumClient:
     def send_list(
         self, to: str, body: str, button_text: str, sections: list[dict], footer: Optional[str] = None
     ) -> dict:
-        payload: dict[str, Any] = {"to": to, "body": body, "button_text": button_text, "sections": sections}
+        # waxum contract: title, description, button_text,
+        # sections[{title, rows[{row_id, title, description}]}], footer
+        payload: dict[str, Any] = {
+            "to": to,
+            "title": button_text,
+            "description": body,
+            "button_text": button_text,
+            "sections": [
+                {
+                    "title": s.get("title", ""),
+                    "rows": [
+                        {
+                            "row_id": r.get("row_id") or r.get("id", ""),
+                            "title": r.get("title", ""),
+                            "description": r.get("description"),
+                        }
+                        for r in s.get("rows", [])
+                    ],
+                }
+                for s in sections
+            ],
+        }
         if footer:
             payload["footer"] = footer
         return self.post(f"/sessions/{self.cfg.session_id}/messages/list", payload)
 
     def send_quick_reply(self, to: str, body: str, buttons: list[dict]) -> dict:
+        # waxum contract: body_text + buttons[{id, display_text}]
         return self.post(f"/sessions/{self.cfg.session_id}/messages/quick-reply", {
-            "to": to, "body": body, "buttons": buttons,
+            "to": to,
+            "body_text": body,
+            "buttons": [
+                {
+                    "id": b.get("id", ""),
+                    "display_text": b.get("display_text") or b.get("text", ""),
+                }
+                for b in buttons
+            ],
         })
 
     def send_cta_url(self, to: str, body: str, button_text: str, url: str, header: Optional[str] = None) -> dict:
-        payload: dict[str, Any] = {"to": to, "body": body, "button_text": button_text, "url": url}
-        if header:
-            payload["header"] = header
+        # waxum contract: header_text, body_text, display_text, url, footer_text
+        payload: dict[str, Any] = {
+            "to": to,
+            "header_text": header or button_text,
+            "body_text": body,
+            "display_text": button_text,
+            "url": url,
+        }
         return self.post(f"/sessions/{self.cfg.session_id}/messages/cta-url", payload)
 
     def send_typing(self, to: str) -> None:

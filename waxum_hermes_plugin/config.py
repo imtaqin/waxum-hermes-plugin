@@ -23,10 +23,17 @@ class WaxumConfig:
     def from_platform_config(cls, cfg) -> "WaxumConfig":
         """Builds config from Hermes's PlatformConfig, falling back to env vars.
 
-        `cfg` is treated duck-typed (`.get(key, default)`) so this works
-        whether Hermes passes a dict or a dedicated PlatformConfig object.
+        Hermes passes a ``gateway.config.PlatformConfig`` dataclass whose
+        custom keys live in ``cfg.extra`` — it has no ``.get()``. Support
+        dict, PlatformConfig (``.extra``), and env-var fallbacks.
         """
-        get = cfg.get if hasattr(cfg, "get") else lambda k, d=None: d
+        if hasattr(cfg, "get"):
+            extra = cfg
+        elif getattr(cfg, "extra", None):
+            extra = cfg.extra
+        else:
+            extra = {}
+        get = extra.get if hasattr(extra, "get") else lambda k, d=None: d
 
         base_url = (get("base_url") or os.environ.get("WAXUM_BASE_URL") or "http://127.0.0.1:3451").rstrip("/")
         token = get("token") or os.environ.get("WAXUM_TOKEN")
@@ -43,17 +50,33 @@ class WaxumConfig:
         return {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
 
 
-def check_requirements(cfg) -> bool:
-    """Cheap presence check used by Hermes before it even builds the adapter."""
-    get = cfg.get if hasattr(cfg, "get") else lambda k, d=None: d
+def check_requirements(cfg=None) -> bool:
+    """Cheap presence check used by Hermes before it even builds the adapter.
+
+    ``cfg`` is optional: the gateway calls ``check_fn()`` with no args at
+    registration time (env-only probe), and only passes a PlatformConfig
+    later from validate_config().
+    """
+    if hasattr(cfg, "get"):
+        extra = cfg
+    elif getattr(cfg, "extra", None):
+        extra = cfg.extra
+    else:
+        extra = {}
+    get = extra.get if hasattr(extra, "get") else lambda k, d=None: d
     return bool(get("token") or os.environ.get("WAXUM_TOKEN")) and bool(
         get("session_id") or os.environ.get("WAXUM_SESSION_ID")
     )
 
 
-def validate_config(cfg) -> str | None:
+def validate_config(cfg) -> bool:
+    """Hermes platform_registry contract: return True when config is valid.
+
+    (The registry does ``if not entry.validate_config(config): fail``, so a
+    ``None`` return is treated as invalid — must be a real bool.)
+    """
     try:
         WaxumConfig.from_platform_config(cfg)
-    except WaxumConfigError as e:
-        return str(e)
-    return None
+        return True
+    except WaxumConfigError:
+        return False

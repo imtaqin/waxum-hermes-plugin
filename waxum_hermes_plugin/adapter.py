@@ -7,6 +7,7 @@ import logging
 import threading
 from typing import Optional
 
+from gateway.config import Platform
 from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageType, SendResult
 
 from .client import WaxumClient
@@ -25,7 +26,7 @@ class WaxumPlatformAdapter(BasePlatformAdapter):
     """Bridges one waxum WhatsApp session into Hermes as a gateway platform."""
 
     def __init__(self, cfg) -> None:
-        super().__init__(cfg)
+        super().__init__(cfg, Platform("waxum"))
         self.waxum_config = WaxumConfig.from_platform_config(cfg)
         self.client = WaxumClient(self.waxum_config)
         self._stream_thread: Optional[threading.Thread] = None
@@ -44,7 +45,11 @@ class WaxumPlatformAdapter(BasePlatformAdapter):
             self._mark_disconnected()
             return False
 
-        if status.get("status") != "connected":
+        # waxum's SessionStatus enum: disconnected, connecting,
+        # waiting_for_qr, waiting_for_pair_code, connected, logged_in.
+        # A paired session reports "logged_in" once the socket is alive —
+        # both "connected" and "logged_in" mean usable.
+        if status.get("status") not in ("connected", "logged_in") or not status.get("is_logged_in"):
             logger.warning(
                 "waxum session %s is not connected (status=%s) — pair it via waxum first",
                 self.waxum_config.session_id, status.get("status"),

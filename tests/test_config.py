@@ -32,9 +32,10 @@ class ConfigTests(unittest.TestCase):
 
     def test_check_and_validate(self):
         self.assertFalse(check_requirements({}))
-        self.assertIsNotNone(validate_config({}))
+        self.assertFalse(validate_config({}))
         self.assertTrue(check_requirements({"token": "t", "session_id": "s"}))
-        self.assertIsNone(validate_config({"token": "t", "session_id": "s"}))
+        # Hermes platform_registry contract: bool — True = valid
+        self.assertTrue(validate_config({"token": "t", "session_id": "s"}))
 
 
 if __name__ == "__main__":

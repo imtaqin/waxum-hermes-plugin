@@ -17,7 +17,7 @@ Homepage = "https://github.com/imtaqin/waxum-hermes-plugin"
 waxum = "https://github.com/imtaqin/waxum"
 
 [project.entry-points."hermes_agent.plugins"]
-waxum = "waxum_hermes_plugin:register"
+waxum = "waxum_hermes_plugin"
 
 [tool.setuptools.packages.find]
 include = ["waxum_hermes_plugin*"]
