@@ -57,9 +57,3 @@ def register(ctx) -> None:
         description="Send an interactive WhatsApp list menu with all common commands (tap to execute)",
         args_hint="[phone]",
     )
-    ctx.register_command(
-        name="model",
-        handler=commands.model_picker,
-        description="Send quick-reply buttons for model switching and common actions (tap to execute)",
-        args_hint="[phone]",
-    )

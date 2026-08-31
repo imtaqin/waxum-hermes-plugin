@@ -73,6 +73,20 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(WaxumRequestError):
                 client.session_status()
 
+    def test_list_messages_supports_arrival_cursor(self):
+        client = WaxumClient(_cfg())
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            return FakeResponse({"messages": []})
+
+        with patch("waxum_hermes_plugin.client.urlrequest.urlopen", side_effect=fake_urlopen):
+            result = client.list_messages(limit=50, after=17)
+
+        self.assertEqual(result, {"messages": []})
+        self.assertIn("/sessions/s1/messages?limit=50&after=17", captured["url"])
+
     def test_send_buttons_builds_expected_payload(self):
         client = WaxumClient(_cfg())
         captured = {}

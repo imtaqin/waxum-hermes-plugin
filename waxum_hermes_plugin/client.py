@@ -15,6 +15,7 @@ import time
 from typing import Any, Iterator, Optional
 from urllib import error as urlerror
 from urllib import request as urlrequest
+from urllib.parse import urlencode
 
 from .config import WaxumConfig
 from .exceptions import WaxumAuthError, WaxumRequestError, WaxumSessionUnavailable
@@ -103,6 +104,14 @@ class WaxumClient:
 
     def session_status(self) -> dict:
         return self.get(f"/sessions/{self.cfg.session_id}/status")
+
+    def list_messages(self, limit: int = 50, after: Optional[int] = None) -> dict:
+        """Read the session arrival feed used as an SSE recovery fallback."""
+        params = {"limit": str(max(1, min(limit, 200)))}
+        if after is not None:
+            params["after"] = str(after)
+        query = urlencode(params)
+        return self.get(f"/sessions/{self.cfg.session_id}/messages?{query}")
 
     def send_text(self, to: str, text: str, reply_to: Optional[str] = None) -> dict:
         body: dict[str, Any] = {"to": to, "text": text}
