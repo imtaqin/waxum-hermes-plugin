@@ -1,57 +1,96 @@
 # waxum-hermes-plugin
 
-Hermes Agent gateway platform adapter for [waxum](https://github.com/imtaqin/waxum)
-— gives Hermes real WhatsApp buttons/lists/quick-replies/CTA-URL messages,
-which the stock Baileys-based WhatsApp bridge in Hermes cannot do reliably.
+A [Hermes Agent](https://github.com/NousResearch/hermes-agent) gateway
+platform plugin backed by [waxum](https://github.com/imtaqin/waxum). Gives
+Hermes real WhatsApp interactivity — buttons, list menus, CTA-url — that the
+stock Baileys-based WhatsApp bridge can't do reliably.
 
-The adapter is a thin HTTP client against a waxum instance you already run —
-no WhatsApp session logic lives in this plugin.
+Structured like Hermes's own platform-adapter plugins: a `plugin.yaml`
+manifest, a `register(ctx)` entry point, registered agent tools (the LLM can
+send buttons/lists itself, not just plain text), a slash command, typed
+config/exceptions, retrying HTTP client with backoff, and unit tests.
+
+```
+waxum_hermes_plugin/
+├── plugin.yaml       # manifest: capabilities, required env, config schema
+├── __init__.py        # register(ctx) — platform + tools + slash command
+├── adapter.py          # BasePlatformAdapter: connect/disconnect/send + event stream
+├── client.py            # HTTP + SSE client: retries, backoff, typed errors
+├── config.py              # WaxumConfig, validated from PlatformConfig or env
+├── schemas.py              # tool schemas the LLM sees
+├── tools.py                 # tool handlers (agent-callable send_buttons/list/cta_url)
+└── commands.py                # /waxum-status slash command
+tests/                          # unit tests (client retry/backoff, config validation)
+```
 
 ## Install
 
-1. Have a `waxum` instance running with a session already paired (QR/pair
-   code done once via waxum itself).
-2. Copy `waxum_platform.py` into `~/.hermes/plugins/`.
-3. Set env vars before starting the Hermes gateway:
-   ```
-   WAXUM_BASE_URL=http://127.0.0.1:3451
-   WAXUM_TOKEN=<waxum bearer token>
-   WAXUM_SESSION_ID=<waxum session id>
-   ```
-4. Start Hermes as usual (`hermes gateway` / your normal entrypoint) — the
-   plugin registers a `waxum` platform automatically.
+**Option A — pip (recommended, auto-discovered via entry point):**
+```bash
+pip install /path/to/waxum-hermes-plugin
+```
+Hermes picks it up on next start via the `hermes_agent.plugins` entry point
+in `pyproject.toml` — no manual file copying.
 
-## Sending interactive messages
-
-`send()` (the adapter's normal path) only does plain text — that's the
-platform-adapter contract. For buttons/lists/CTA-url, call the extra
-methods on the adapter instance from a Hermes plugin hook or tool:
-
-```python
-await adapter.send_buttons(chat_id, body="Pick one", buttons=[
-    {"id": "yes", "text": "Yes"},
-    {"id": "no", "text": "No"},
-])
-await adapter.send_list(chat_id, body="Menu", button_text="Open menu", sections=[...])
-await adapter.send_quick_reply(chat_id, body="...", buttons=[...])
-await adapter.send_cta_url(chat_id, body="...", button_text="Open", url="https://...")
+**Option B — manual drop-in:**
+```bash
+cp -r waxum_hermes_plugin ~/.hermes/plugins/waxum
 ```
 
-Button/list taps arrive back as normal `MessageEvent`s with
-`metadata["waxum_message_type"]` set, so a hook can branch on them.
+Either way, set the required env vars before starting the gateway:
+```
+WAXUM_BASE_URL=http://127.0.0.1:3451
+WAXUM_TOKEN=<waxum bearer token>
+WAXUM_SESSION_ID=<waxum session id, already paired via waxum itself>
+```
 
-## Compatibility note
+Verify with Hermes's own plugin linter:
+```bash
+hermes plugins doctor . --ci
+```
 
-Import paths (`gateway.platforms.base`) follow the publicly documented
-`BasePlatformAdapter` contract as of Hermes Agent's developer docs
-(nousresearch.com/docs/developer-guide/adding-platform-adapters). If your
-installed `hermes-agent` moved that module, only the two `from gateway...`
-imports at the top of `waxum_platform.py` need updating — nothing else
-changes.
+## What it registers
 
-## Endpoints used (waxum side)
+- **Platform `waxum`** — a live WhatsApp session. Connects by polling
+  `GET /sessions/{id}/status`, then streams incoming messages from waxum's
+  `GET /events/tail` SSE endpoint on a background thread (auto-reconnects
+  with jittered exponential backoff on any drop).
+- **Tools** `waxum_send_buttons`, `waxum_send_list`, `waxum_send_cta_url` —
+  the LLM can call these directly mid-conversation to send interactive
+  WhatsApp messages, no separate plugin hook required.
+- **Command** `/waxum-status` — prints the session's connection status.
 
-`GET /sessions/{id}/status`, `GET /events/tail?session=...&event=message`
-(SSE), `POST /sessions/{id}/messages/text|buttons|list|quick-reply|cta-url`,
-`POST /sessions/{id}/chatstate/typing`, `GET /sessions/{id}/messages/chat/{jid}`.
-All require `Authorization: Bearer <WAXUM_TOKEN>`.
+Button/list taps come back as ordinary incoming `MessageEvent`s with
+`metadata["waxum_message_type"]` set (e.g. `buttons_response`,
+`list_response`), so normal conversation handling sees them without a
+special code path.
+
+## Reliability notes
+
+- HTTP calls retry on 5xx/transport errors with capped exponential backoff
+  + jitter; 401 and 503 (session not connected) fail fast with a typed
+  exception instead of retrying — the retriable/non-retriable split matches
+  waxum's own status codes.
+- The SSE stream runs on its own thread and reconnects indefinitely; a
+  bounded in-memory id set (see `adapter.py`) drops duplicate deliveries
+  across reconnects.
+- Tool handlers never raise — every waxum error becomes a JSON
+  `{"success": false, "error": ...}` string, per Hermes's tool-handler
+  contract.
+
+## Testing
+
+```bash
+python -m unittest discover -s tests
+```
+No network or live waxum instance required — the client tests mock
+`urllib` directly.
+
+## Compatibility
+
+Targets the documented `BasePlatformAdapter` contract
+(`gateway.platforms.base`) and `PluginContext` API as of the public Hermes
+Agent developer docs. `adapter.py` is the only file that imports Hermes's
+own `gateway` package, and only inside `register()` — everything else
+(`config.py`, `client.py`, `tools.py`) is plain stdlib Python you can test
+and reuse without a Hermes install.

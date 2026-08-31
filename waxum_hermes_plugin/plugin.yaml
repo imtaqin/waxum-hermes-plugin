@@ -1,0 +1,29 @@
+name: waxum
+version: 1.0.0
+description: WhatsApp gateway platform for Hermes, backed by waxum — adds real buttons/lists/CTA-url that the built-in Baileys bridge can't do.
+author: taqin
+license: MIT
+homepage: https://github.com/imtaqin/waxum-hermes-plugin
+tags: [gateway, whatsapp, platform]
+
+provides_tools:
+  - waxum_send_buttons
+  - waxum_send_list
+  - waxum_send_cta_url
+
+requires_env:
+  - name: WAXUM_BASE_URL
+    description: "Base URL of your waxum instance, e.g. http://127.0.0.1:3451"
+    secret: false
+  - name: WAXUM_TOKEN
+    description: "waxum bearer token for the session's API access"
+    url: "https://github.com/imtaqin/waxum#authentication"
+    secret: true
+  - name: WAXUM_SESSION_ID
+    description: "waxum session id to bind this platform to (must already be paired)"
+    secret: false
+
+config_schema:
+  base_url: {type: str, default: "http://127.0.0.1:3451", description: "waxum base URL"}
+  token: {type: str, default: "", description: "waxum bearer token"}
+  session_id: {type: str, default: "", description: "waxum session id"}

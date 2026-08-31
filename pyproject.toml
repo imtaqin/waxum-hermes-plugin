@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "waxum-hermes-plugin"
+version = "1.0.0"
+description = "Hermes Agent gateway platform adapter backed by waxum, with real WhatsApp interactive messages (buttons/lists/CTA-url)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "taqin", email = "cp@imtaqin.id" }]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/imtaqin/waxum-hermes-plugin"
+waxum = "https://github.com/imtaqin/waxum"
+
+[project.entry-points."hermes_agent.plugins"]
+waxum = "waxum_hermes_plugin:register"
+
+[tool.setuptools.packages.find]
+include = ["waxum_hermes_plugin*"]
