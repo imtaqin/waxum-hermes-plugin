@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import unittest
 
 from waxum_hermes_plugin.adapter import history_message_to_event_data
@@ -58,14 +60,27 @@ class AdapterHistoryTests(unittest.TestCase):
                 })
                 self.assertEqual(data["text"], command)
 
-    def test_outgoing_normal_message_is_ignored(self):
+    def test_outgoing_normal_message_is_treated_as_self_chat_input(self):
+        data = history_message_to_event_data({
+            "message_id": "m3",
+            "chat_jid": "self@lid",
+            "sender_jid": "self@lid",
+            "direction": "out",
+            "msg_type": "text",
+            "body": "hello from my other device",
+        })
+        self.assertEqual(data["text"], "hello from my other device")
+        self.assertFalse(data["is_from_me"])
+
+    def test_known_bot_outgoing_message_is_ignored(self):
         self.assertIsNone(history_message_to_event_data({
             "message_id": "m3",
             "chat_jid": "self@lid",
+            "sender_jid": "self@lid",
             "direction": "out",
             "msg_type": "text",
             "body": "bot reply",
-        }))
+        }, own_message_ids={"m3"}))
 
     def test_outgoing_interactive_response_in_other_chat_is_ignored(self):
         self.assertIsNone(history_message_to_event_data({

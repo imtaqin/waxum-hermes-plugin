@@ -17,9 +17,6 @@ from .exceptions import WaxumError, WaxumSessionUnavailable
 
 logger = logging.getLogger("hermes.plugins.waxum")
 
-# ponytail: unbounded in-memory set, fine for the volume one WhatsApp
-# session sees; swap for an LRU/TTL cache if this ever needs to survive
-# millions of messages per process lifetime.
 _DEDUPE_MAX = 10_000
 
 
@@ -50,7 +47,7 @@ def _interactive_command(body: str | None) -> str | None:
     return labels.get(body.strip())
 
 
-def history_message_to_event_data(message: dict) -> dict | None:
+def history_message_to_event_data(message: dict, *, own_message_ids: set[str] | None = None) -> dict | None:
     """Convert Waxum history rows to the adapter's event-data shape.
 
     The Waxum SSE endpoint intentionally exposes only a 160-character preview.
@@ -62,18 +59,17 @@ def history_message_to_event_data(message: dict) -> dict | None:
     body = message.get("body")
     is_interactive_response = msg_type in {"interactive_response", "buttons_response", "list_response"}
     command = _interactive_command(body) if is_interactive_response else None
-    # An interactive response is a user action only in the configured
-    # self-chat. Outgoing button replies sent to other chats must not be
-    # replayed into Hermes as commands.
     chat = message.get("chat_jid") or message.get("chat")
     sender = message.get("sender_jid") or message.get("from") or chat
     is_self_chat = bool(chat and sender and str(chat) == str(sender))
-    if direction == "out" and (not command or not is_self_chat):
+    # Waxum stores both owner-typed self-chat messages and bot replies as
+    # outgoing. Only suppress IDs that this adapter sent itself.
+    if direction == "out" and own_message_ids and message.get("message_id") in own_message_ids:
+        return None
+    if direction == "out" and not is_self_chat:
         return None
     if not body and not command:
         return None
-    chat = message.get("chat_jid") or message.get("chat")
-    sender = message.get("sender_jid") or message.get("from") or chat
     if not chat or not sender or not message.get("message_id"):
         return None
     return {
@@ -86,8 +82,6 @@ def history_message_to_event_data(message: dict) -> dict | None:
         "caption": None,
         "message_type": msg_type,
         "is_group": str(chat).endswith("@g.us"),
-        # Self-chat interactive responses are user actions, despite Waxum
-        # storing them as outgoing rows because the bot account sent them.
         "is_from_me": False,
     }
 
@@ -119,8 +113,7 @@ class WaxumPlatformAdapter(BasePlatformAdapter):
         self._seen_lock = threading.Lock()
         self._history_thread: Optional[threading.Thread] = None
         self._history_initialized = False
-
-    # -- BasePlatformAdapter contract -------------------------------------
+        self._own_message_ids: set[str] = set()
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         try:
@@ -129,11 +122,6 @@ class WaxumPlatformAdapter(BasePlatformAdapter):
             logger.error("waxum connect failed: %s", e)
             self._mark_disconnected()
             return False
-
-        # waxum's SessionStatus enum: disconnected, connecting,
-        # waiting_for_qr, waiting_for_pair_code, connected, logged_in.
-        # A paired session reports "logged_in" once the socket is alive —
-        # both "connected" and "logged_in" mean usable.
         if status.get("status") not in ("connected", "logged_in") or not status.get("is_logged_in"):
             logger.warning(
                 "waxum session %s is not connected (status=%s) — pair it via waxum first",
@@ -144,13 +132,10 @@ class WaxumPlatformAdapter(BasePlatformAdapter):
 
         self._stop.clear()
         self._loop = asyncio.get_running_loop()
-        # Establish the history watermark before starting live consumers. This
-        # prevents a message arriving during startup from being mistaken for
-        # an old row and skipped by the initial poll.
         try:
             page = await asyncio.to_thread(self.client.list_messages, 50)
             for message in page.get("messages", []) if isinstance(page, dict) else []:
-                data = history_message_to_event_data(message)
+                data = history_message_to_event_data(message, own_message_ids=self._own_message_ids)
                 if data and data.get("message_id"):
                     self._already_seen(data["message_id"])
             self._history_initialized = True
@@ -176,7 +161,7 @@ class WaxumPlatformAdapter(BasePlatformAdapter):
         self._mark_disconnected()
 
     async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
-                    metadata: Optional[dict] = None) -> SendResult:
+                   metadata: Optional[dict] = None) -> SendResult:
         return await self._call(self.client.send_text, chat_id, content, reply_to)
 
     async def send_typing(self, chat_id: str) -> None:
@@ -192,35 +177,33 @@ class WaxumPlatformAdapter(BasePlatformAdapter):
             logger.debug("waxum get_chat_info failed: %s", e)
             return {}
 
-    # -- interactive sends, also exposed as agent tools in tools.py -------
-
     async def send_buttons(self, chat_id: str, body: str, buttons: list[dict],
-                            footer: Optional[str] = None) -> SendResult:
+                           footer: Optional[str] = None) -> SendResult:
         return await self._call(self.client.send_buttons, chat_id, body, buttons, footer)
 
     async def send_list(self, chat_id: str, body: str, button_text: str,
-                         sections: list[dict], footer: Optional[str] = None) -> SendResult:
+                        sections: list[dict], footer: Optional[str] = None) -> SendResult:
         return await self._call(self.client.send_list, chat_id, body, button_text, sections, footer)
 
     async def send_quick_reply(self, chat_id: str, body: str, buttons: list[dict]) -> SendResult:
         return await self._call(self.client.send_quick_reply, chat_id, body, buttons)
 
     async def send_cta_url(self, chat_id: str, body: str, button_text: str, url: str,
-                            header: Optional[str] = None) -> SendResult:
+                           header: Optional[str] = None) -> SendResult:
         return await self._call(self.client.send_cta_url, chat_id, body, button_text, url, header)
 
     async def _call(self, fn, *args) -> SendResult:
         try:
             result = await asyncio.to_thread(fn, *args)
-            return SendResult(success=True, message_id=result.get("message_id"))
+            message_id = result.get("message_id")
+            if message_id:
+                self._own_message_ids.add(message_id)
+            return SendResult(success=True, message_id=message_id)
         except WaxumSessionUnavailable as e:
             return SendResult(success=False, message_id=None, error=str(e))
         except WaxumError as e:
             logger.error("waxum send failed: %s", e)
             return SendResult(success=False, message_id=None, error=str(e))
-
-    # -- event stream (runs on a dedicated thread; hands events back to
-    #    the adapter's asyncio loop via call_soon_threadsafe) ------------
 
     def _run_stream(self) -> None:
         path = f"/events/tail?session={self.waxum_config.session_id}&event=message"
@@ -240,29 +223,20 @@ class WaxumPlatformAdapter(BasePlatformAdapter):
                 )
 
     def _run_history_poll(self) -> None:
-        """Recover complete messages unavailable in Waxum's SSE preview.
-
-        The API returns newest-first pages. We repeatedly read the head and
-        deduplicate by WhatsApp message ID, avoiding the unstable arrival
-        cursor semantics documented by Waxum's own chat store.
-        """
+        """Recover complete messages unavailable in Waxum's SSE preview."""
         while not self._stop.is_set():
             try:
                 page = self.client.list_messages(limit=50)
                 messages = page.get("messages", []) if isinstance(page, dict) else []
                 if not self._history_initialized:
-                    # Do not replay the last 50 historical messages on every
-                    # gateway restart. The next pass is the live recovery
-                    # boundary; SSE remains responsible for messages already
-                    # observed during this first read.
                     for message in messages:
-                        data = history_message_to_event_data(message)
+                        data = history_message_to_event_data(message, own_message_ids=self._own_message_ids)
                         if data and data.get("message_id"):
                             self._already_seen(data["message_id"])
                     self._history_initialized = True
                 else:
                     for message in reversed(messages):
-                        data = history_message_to_event_data(message)
+                        data = history_message_to_event_data(message, own_message_ids=self._own_message_ids)
                         if not data:
                             continue
                         msg_id = data.get("message_id")
@@ -289,7 +263,6 @@ class WaxumPlatformAdapter(BasePlatformAdapter):
         msg_id = data.get("message_id")
         if not msg_id or data.get("is_from_me") or (not claimed and self._already_seen(msg_id)):
             return
-
         source = self.build_source(
             chat_id=data.get("chat"),
             chat_name=data.get("push_name") or data.get("from_phone") or data.get("from"),
