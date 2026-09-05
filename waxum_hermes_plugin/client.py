@@ -120,21 +120,33 @@ class WaxumClient:
         return self.post(f"/sessions/{self.cfg.session_id}/messages/text", body)
 
     def send_buttons(self, to: str, body: str, buttons: list[dict], footer: Optional[str] = None) -> dict:
-        # waxum contract: content_text + buttons[{button_id, display_text}]
+        # Uses /messages/interactive (native_flow quick_reply wrapped in
+        # viewOnceMessageV2), NOT the legacy /messages/buttons endpoint.
+        # Legacy ButtonsMessage is silently dropped by modern WhatsApp on
+        # consumer (unverified-business) accounts: the API returns a
+        # message_id and the text arrives, but the buttons never render.
+        # waxum contract: body_text, footer_text, view_once,
+        # buttons[{name, button_params_json}].
         payload: dict[str, Any] = {
             "to": to,
-            "content_text": body,
+            "body_text": body,
+            "view_once": True,
             "buttons": [
                 {
-                    "button_id": b.get("button_id") or b.get("id", ""),
-                    "display_text": b.get("display_text") or b.get("text", ""),
+                    "name": "quick_reply",
+                    "button_params_json": json.dumps(
+                        {
+                            "display_text": b.get("display_text") or b.get("text", ""),
+                            "id": b.get("button_id") or b.get("id", ""),
+                        }
+                    ),
                 }
                 for b in buttons
             ],
         }
         if footer:
-            payload["footer"] = footer
-        return self.post(f"/sessions/{self.cfg.session_id}/messages/buttons", payload)
+            payload["footer_text"] = footer
+        return self.post(f"/sessions/{self.cfg.session_id}/messages/interactive", payload)
 
     def send_list(
         self, to: str, body: str, button_text: str, sections: list[dict], footer: Optional[str] = None
